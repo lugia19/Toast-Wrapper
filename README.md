@@ -48,7 +48,7 @@ a higher API version, so check `ac6_toast_api_version() >= ` the version you wro
 - Keep it to one line, about 85 characters. Longer text wraps to a second line that hangs below the strip.
 - Only characters in the game's menu font render (accented Latin works; symbols like ✓ show as a box).
 - It sits top left, over the menus' title area (in the garage, under "GARAGE").
-- Never load it together with the research probe (`probe-dll\`): both hook the same function.
+- Never load it together with this repo's research probe (`probe-dll\`): both hook the same function.
 
 ## Testing
 
