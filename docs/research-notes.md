@@ -64,19 +64,44 @@ labels `FadeIn`, `Loop`, `FadeOut`. No ActionScript logic beyond `stop()`: C++ d
 
 ## Probe
 
-`probe-dll\` (`cargo build --release`), loaded by `probe.me3` (alt save `SystemToast.sl2`). It hooks the same
-function as ac6_toast: never load both. Log `Game\debug-logs\system_toast_probe.log`: every text set (with callers,
+`probe-dll\` (`cargo build --release`), loaded by `probe.me3` (alt save `SystemToast.sl2`). It hooks the toast
+model update, toast_wrapper the announce controller update, so they can be loaded together. Log `Game\debug-logs\system_toast_probe.log`: every text set (with callers,
 on change), model state changes, a model dump on first update. F7 = custom toast (our own UTF-16 text through the
-MenuString direct pointer), F8 = stock toast (system message 5000), F9 = model dump.
+MenuString direct pointer), F8 = stock toast (system message 5000), F9 = model dump, F10 = push a system announce.
+
+## System announce: the system both games share (2026-11-13)
+
+Elden Ring has no `01_SystemToast`, but both games have the same queued **system announce** (ER RTTI names
+`CS::FeSystemAnnounceViewModel` / `CS::FeSystemAnnounceView`; fromsoftware-rs documents ER's layout and play states).
+
+| | Elden Ring (Steam build 25827938) | AC6 1.09.1 |
+|---|---|---|
+| Push `(model, const wchar_t*) -> bool` | `0x140843000` | `0x140e79dd0` |
+| Model | `[CSMenuManImp(0x143d72840)+0x860]` | `[CSMenuMan(0x144e15530)+0x6f0]` |
+| Queue (DLDeque) / count | model+0x10 / +0x38 | model+0x08 / +0x30 |
+| Window, controller | `FeSystemAnnounceView` (0xb68; model +0xb00, state +0xb50) | `01_SystemAnnounce` (factory `0x1438fd7b0`, ctor `0x140fd5ed0`, 0x628; model +0x5b8, state +0x610), binds `SystemAnnounce/Text` |
+| Vanilla caller | `0x1401cca70`: server announcement strings (UTF-8 -> UTF-16) | `0x1403c1870`, same shape |
+
+- Push copies the text into a new entry's MenuString (game-owned) and refuses when 9 are queued (`count + 1 < 10`).
+  The view plays them one by one (fade in, scroll if wider than the screen, fade out, dequeue).
+- AC6 runtime (probe F10, Arxan on): push returns 1. At the title screen nothing plays and the queue only grows
+  (the window isn't running there); in the garage the queued entries play: an orange line in a full-width strip at
+  the bottom, just above the key guide. The test line (95 characters) fit without scrolling.
+- AC6 in a mission: plays fine too (checked by lugia19). The text starts flush against the left screen edge (the
+  view sets the text field's x itself, for scrolling), so toast_wrapper adds 18 leading spaces, which line it up
+  with the key guide.
+- toast_wrapper (this repo's DLL, from v0.2.0) uses this system: it hooks the controller update `0x140fd61a0`
+  (controller, dt) and pushes waiting texts from there (game thread). Each short entry stays up about 13 s; a
+  150-character line still fit without scrolling. The controller only plays while `CSMenuMan+0x6c8` is 0.
+- Not yet checked: ER at runtime; whether an entry can be changed or removed while it plays.
 
 ## Open questions
 
-- How the sibling announce / tutorial toast / room announce movies are driven (CSMenuMan+0x20 builds another
-  window with `0x140cce250`; Elden Ring's FeSystemAnnounceViewModel has a queue, this one has none).
+- How the tutorial toast / room announce movies are driven.
 
 ## Planned: Elden Ring support
 
-Make ac6_toast support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
-offsets in a per-game table, shared logic unchanged), together with gfx-reloader. Starting points: the ER Ghidra
+Make toast_wrapper support both AC6 and Elden Ring in one DLL through the system announce (game detected at load,
+the addresses and offsets above in a per-game table, shared logic unchanged), together with gfx-reloader. Starting points: the ER Ghidra
 project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); fromsoftware-rs `crates/eldenring/src/cs/menu_man.rs`
 (`CSMenuManImp`, `FeSystemAnnounceView`, ui_states); me3's ER profile. Debug with `--disable-arxan`, test with it on.

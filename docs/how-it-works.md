@@ -1,45 +1,26 @@
-# How ac6_toast works
+# How toast_wrapper works
 
-Addresses are for AC6 1.09.1. The full research, with call sites and how each part was found, is in `research-notes.md`.
+Addresses are for AC6 1.09.1. The full research, with call sites and how each part was found, is in
+`research-notes.md`.
 
-## The game's toast
+## The game's system announce
 
-- `menu\01_systemtoast.gfx` is a single line of text (`ItemList/Text_0`) with FadeIn / Loop / FadeOut labels. C++
-  drives it.
-- CSMenuMan (`[0x144e15530]`) builds its window at startup and keeps a small **toast model** at `+0x6f8`:
-  - +0x08: the requested text, a MenuString;
-  - +0x58: a copy of it;
-  - +0x98: requested last frame;
-  - +0x99: shown;
-  - +0x9c: hold timer.
-- Every frame, CSMenuMan's update calls the model update `0x140e976b0(model, dt)`, then **clears the text**. A toast
-  is therefore up while something sets the text each frame (`0x140dc25e0(MenuString*)`). The game keeps it for
-  1.0 s after the text stops (float `0x144241500`), then fades it out. There is no queue.
-- The window's controller fades on `*[model+0x48]` (it points at +0x99) and writes the text into Text_0.
-- Vanilla only uses it for online Versus Room status (system messages 5000, 6000, 6100, 6200), so offline the slot
-  is free.
-
-## Our text in the game's string
-
-A MenuString (0x40 bytes) is laid out as:
-- +0x00: a direct `wchar*`;
-- +0x08: an owned DLString.
-
-The game's copy keeps the direct pointer as is. So the DLL builds one empty MenuString (constructor `0x140442520`)
-and, each frame, points +0x00 at the active toast's UTF-16 text before calling the set-text function.
-
-The game reads that pointer on later frames (+0x08, +0x58, the controller). Text replaced by `update`, or belonging
-to a finished toast, is therefore kept for 120 more updates before it's freed.
-
-The same rule means a MenuString the game made (e.g. an FMG text) must not be kept across frames. Its direct pointer
-points into message data that the game replaces on load. A probe that kept one showed mission text in the garage.
+- `01_SystemAnnounce` is a one-line banner at the bottom of the screen (`SystemAnnounce/Text`). Vanilla uses it for
+  server announcements. Elden Ring has the same system (`CS::FeSystemAnnounceView` / `FeSystemAnnounceViewModel`).
+- CSMenuMan (`[0x144e15530]`) keeps its **model** at `+0x6f0`: a queue (DLDeque at +0x08, count +0x30) of entries,
+  each a flag and a game-owned MenuString.
+- `0x140e79dd0(model, const wchar_t*) -> bool` pushes an entry with a copy of the text, unless 9 are already queued.
+- The window's controller update `0x140fd61a0(controller, dt)` (model pointer at controller+0x5b8) takes the next
+  entry when the banner is idle and plays it: fade in, scroll if wider than the screen, fade out. It only plays while
+  `CSMenuMan+0x6c8` is 0, and the window isn't running on the title screen.
 
 ## The DLL
 
-- **One hook**, on the model update. Before the original runs, it ticks the queue with `dt` and, if a toast is
-  active, sets its text.
-- **Queue** (`dll\src\queue.rs`, unit tested):
-  - The active toast's text is set for its duration minus the game's 1 s hold.
-  - The next toast starts once the game reports the model hidden (+0x99 = 0), plus 0.4 s for the FadeOut animation.
-  - Sticky toasts (`seconds <= 0`) stay until dismissed.
-- **Exports** lock one mutex. Strings are copied in, so callers own nothing afterwards.
+- `toast_wrapper_show` copies the text (UTF-8 → UTF-16, 18 spaces of padding, 512 units at most) into a small
+  waiting list (64 at most).
+- **One hook**, on the controller update: before the original runs, it pushes waiting texts into the game's queue
+  until the game reports it full. The game copies each text, so the DLL frees its copy right away.
+- Pushing happens on the game thread because the game reads and dequeues the same queue there.
+- The earlier design drove `01_SystemToast` (top-left, one text slot cleared every frame) with its own queue and
+  timing. It's kept in `research-notes.md` and the `probe-dll\` research probe; the announce banner replaced it
+  because it exists in both AC6 and Elden Ring and already queues and plays texts itself.

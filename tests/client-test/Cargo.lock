@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "ac6-toast-client-test"
+name = "toast-wrapper-client-test"
 version = "0.1.0"

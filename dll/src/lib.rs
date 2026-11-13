@@ -1,12 +1,15 @@
-//! ac6_toast: one-line notifications ("toasts") for Armored Core VI mods, shown in the game's own `01_SystemToast`
-//! window (top left). Other mods call the exports below (see README.md and client\ac6_toast_client.rs).
+//! toast_wrapper: one-line notifications for Armored Core VI mods, shown by the game's own system announce banner
+//! (a strip at the bottom of the screen). Other mods call the exports below (see README.md and
+//! client\toast_wrapper_client.rs).
 //!
-//! Toasts play one at a time, in order. Each call copies the text, so callers' strings can be freed right away.
-//! All exports are thread-safe and work before the game is up (toasts wait in the queue).
+//! The game queues and plays the texts itself (fade in, scroll when too wide, fade out), one after another. This DLL
+//! only copies texts in and hands them to the game from the game thread, a few at a time as the game's queue (9
+//! entries) has room.
 //!
 //! API stability: an existing export's signature never changes; new behaviour gets a new export and a higher
 //! `API_VERSION`, so a client only has to check the version is at least the one it was written for.
 
+use std::collections::VecDeque;
 use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -14,16 +17,20 @@ use std::sync::{Mutex, OnceLock};
 mod game;
 #[cfg(feature = "debug-hotkey")]
 mod hotkey;
-mod queue;
 #[cfg(feature = "socket")]
 mod socket;
 
-const API_VERSION: u32 = 1;
-/// Longest text kept, in UTF-16 units (the toast fits about 85 characters per line anyway).
+const API_VERSION: u32 = 2;
+/// The banner's text starts flush against the left screen edge; 18 spaces line it up with the key guide below it.
+const PADDING: &str = "                  "; // 18 spaces
+/// Longest text kept, in UTF-16 units.
 const MAX_TEXT: usize = 512;
+/// Most texts waiting for room in the game's queue.
+const MAX_PENDING: usize = 64;
 
-static QUEUE: Mutex<queue::Queue> = Mutex::new(queue::Queue::new());
-/// The game hook is installed; without it toasts would only fill the queue.
+/// Texts not yet handed to the game: UTF-16, null-terminated, padded.
+static PENDING: Mutex<VecDeque<Vec<u16>>> = Mutex::new(VecDeque::new());
+/// The game hook is installed; without it texts would only pile up.
 static HOOKED: AtomicBool = AtomicBool::new(false);
 static LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
@@ -35,70 +42,49 @@ pub(crate) fn log(line: &str) {
     }
 }
 
-/// Converted before taking the queue lock (the game thread takes it every frame).
-fn to_text(text: &str) -> queue::Text {
-    let mut wide = queue::to_wide(text);
-    if wide.len() > MAX_TEXT + 1 {
-        wide = queue::to_wide(&String::from_utf16_lossy(&wide[..MAX_TEXT]));
-    }
-    wide
-}
-
-// ---- API (also used by the hotkey and socket features) ---------------------------------------------------------------
-
-/// Queues a toast shown for `seconds` (0 or less: until dismissed). Returns its id, or 0 if the queue is full or
-/// the game hook isn't installed.
-pub(crate) fn show(text: &str, seconds: f32) -> u64 {
+/// Queues a text for the banner. False if the DLL isn't hooked or too many texts are waiting.
+pub(crate) fn show(text: &str) -> bool {
     if !HOOKED.load(Ordering::Relaxed) {
-        return 0;
+        return false;
     }
-    let text = to_text(text);
-    QUEUE.lock().unwrap().show(text, seconds)
-}
-
-/// Replaces a toast's text. False if the id is unknown or the toast is finished.
-pub(crate) fn update(id: u64, text: &str) -> bool {
-    let text = to_text(text);
-    QUEUE.lock().unwrap().update(id, text)
-}
-
-/// Ends a toast on screen (it fades out normally) or drops a queued one.
-pub(crate) fn dismiss(id: u64) -> bool {
-    QUEUE.lock().unwrap().dismiss(id)
-}
-
-/// UTF-8 from a caller's pointer and length (invalid sequences become U+FFFD).
-unsafe fn text_arg<'a>(text: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
-    if text.is_null() {
-        return "".into();
+    let mut wide: Vec<u16> = PADDING.encode_utf16().chain(text.encode_utf16()).take(MAX_TEXT).collect();
+    wide.iter_mut().filter(|c| **c == 0).for_each(|c| *c = b' ' as u16);
+    wide.push(0);
+    let mut pending = PENDING.lock().unwrap();
+    if pending.len() >= MAX_PENDING {
+        return false;
     }
-    String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(text, len) })
+    pending.push_back(wide);
+    true
+}
+
+/// Game thread: hands waiting texts to `push` (the game copies them) until it reports its queue full.
+pub(crate) fn drain_pending(mut push: impl FnMut(&[u16]) -> bool) {
+    let mut pending = PENDING.lock().unwrap();
+    while let Some(text) = pending.front() {
+        if !push(text) {
+            break;
+        }
+        pending.pop_front();
+    }
 }
 
 // ---- exports -----------------------------------------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ac6_toast_api_version() -> u32 {
+pub extern "C" fn toast_wrapper_api_version() -> u32 {
     API_VERSION
 }
 
+/// Queues `len` bytes of UTF-8 text for the banner (invalid sequences become U+FFFD). Returns false if the DLL
+/// couldn't hook the game or 64 texts are already waiting.
+///
 /// # Safety
-/// `text` points at `len` bytes (UTF-8), or is null.
+/// `text` points at `len` bytes, or is null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ac6_toast_show(text: *const u8, len: usize, seconds: f32) -> u64 {
-    show(&unsafe { text_arg(text, len) }, seconds)
-}
-
-/// # Safety
-/// `text` points at `len` bytes (UTF-8), or is null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn ac6_toast_update(id: u64, text: *const u8, len: usize) -> bool {
-    update(id, &unsafe { text_arg(text, len) })
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn ac6_toast_dismiss(id: u64) -> bool {
-    dismiss(id)
+pub unsafe extern "C" fn toast_wrapper_show(text: *const u8, len: usize) -> bool {
+    let bytes = if text.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(text, len) } };
+    show(&String::from_utf8_lossy(bytes))
 }
 
 // ---- setup -------------------------------------------------------------------------------------------------------------
@@ -109,15 +95,15 @@ extern "system" fn DllMain(_module: *mut std::ffi::c_void, reason: u32, _reserve
     if reason == DLL_PROCESS_ATTACH {
         let log_dir = std::env::current_exe().map(|p| p.with_file_name("debug-logs")).unwrap_or("debug-logs".into());
         let _ = std::fs::create_dir_all(&log_dir);
-        if let Ok(file) = std::fs::File::create(log_dir.join("ac6_toast.log")) {
+        if let Ok(file) = std::fs::File::create(log_dir.join("toast_wrapper.log")) {
             let _ = LOG.set(Mutex::new(file));
         }
         match game::install() {
             Ok(()) => {
                 HOOKED.store(true, Ordering::Relaxed);
-                log(&format!("ac6_toast {} (API {API_VERSION}): hooked", env!("CARGO_PKG_VERSION")));
+                log(&format!("toast_wrapper {} (API {API_VERSION}): hooked", env!("CARGO_PKG_VERSION")));
             }
-            Err(e) => log(&format!("ac6_toast: not hooked, toasts are refused: {e}")),
+            Err(e) => log(&format!("toast_wrapper: not hooked, texts are refused: {e}")),
         }
         #[cfg(feature = "debug-hotkey")]
         hotkey::start();
@@ -125,4 +111,29 @@ extern "system" fn DllMain(_module: *mut std::ffi::c_void, reason: u32, _reserve
         socket::start();
     }
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drains_until_the_game_queue_is_full() {
+        HOOKED.store(true, Ordering::Relaxed);
+        for i in 0..12 {
+            assert!(show(&format!("t{i}")));
+        }
+        let mut game_queue: Vec<String> = Vec::new();
+        let mut push = |text: &[u16]| {
+            if game_queue.len() >= 9 {
+                return false;
+            }
+            game_queue.push(String::from_utf16_lossy(&text[..text.len() - 1]));
+            true
+        };
+        drain_pending(&mut push);
+        assert_eq!(game_queue.len(), 9);
+        assert_eq!(game_queue[0], format!("{PADDING}t0"));
+        assert_eq!(PENDING.lock().unwrap().len(), 3);
+    }
 }

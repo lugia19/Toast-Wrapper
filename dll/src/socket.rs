@@ -1,7 +1,5 @@
 //! Command socket for external tools (feature `socket`): TCP 127.0.0.1:48700, one command per line, one reply line.
-//!   show <seconds> <text>   -> id (0 = queue full)
-//!   update <id> <text>      -> 1 / 0
-//!   dismiss <id>            -> 1 / 0
+//!   show <text>   -> 1 (queued) / 0 (refused)
 //! Anything else gets `error: <why>`. Test client: tools\send_toast.py.
 
 use std::io::{BufRead, BufReader, Write};
@@ -27,29 +25,12 @@ fn serve(stream: TcpStream) {
     let Ok(mut out) = stream.try_clone() else { return };
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { return };
-        if writeln!(out, "{}", run(line.trim())).is_err() {
+        let reply = match line.trim().split_once(' ') {
+            Some(("show", text)) => (crate::show(text) as u8).to_string(),
+            _ => "error: the command is show <text>".to_string(),
+        };
+        if writeln!(out, "{reply}").is_err() {
             return;
         }
-    }
-}
-
-fn run(line: &str) -> String {
-    let (command, rest) = line.split_once(' ').unwrap_or((line, ""));
-    let (first, text) = rest.split_once(' ').unwrap_or((rest, ""));
-    let bad_id = || format!("error: bad id {first:?}");
-    match command {
-        "show" => match first.parse::<f32>() {
-            Ok(seconds) => crate::show(text, seconds).to_string(),
-            Err(_) => format!("error: bad seconds {first:?}"),
-        },
-        "update" => match first.parse::<u64>() {
-            Ok(id) => (crate::update(id, text) as u8).to_string(),
-            Err(_) => bad_id(),
-        },
-        "dismiss" => match first.parse::<u64>() {
-            Ok(id) => (crate::dismiss(id) as u8).to_string(),
-            Err(_) => bad_id(),
-        },
-        _ => "error: commands are show <seconds> <text>, update <id> <text>, dismiss <id>".into(),
     }
 }

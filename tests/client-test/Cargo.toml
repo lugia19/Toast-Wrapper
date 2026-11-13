@@ -1,5 +1,5 @@
 [package]
-name = "ac6-toast-client-test"
+name = "toast-wrapper-client-test"
 version = "0.1.0"
 edition = "2024"
 

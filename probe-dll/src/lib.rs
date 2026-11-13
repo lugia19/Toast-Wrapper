@@ -239,9 +239,32 @@ unsafe fn inject() {
     }
 }
 
+/// System announce (the same queued system as Elden Ring's FeSystemAnnounceViewModel): 0x140e79dd0(model, wchar*)
+/// pushes a copy of the text if fewer than 9 are queued; model = [CSMenuMan+0x6f0] (deque at +0x08, count +0x30).
+const ANNOUNCE_PUSH: usize = 0x140e79dd0;
+const MENU_MAN_ANNOUNCE_MODEL: usize = 0x6f0;
+const ANNOUNCE_TEXT: &str = "system-toast probe: system announce test, a longer line to see whether it scrolls across the banner";
+static ANNOUNCE_PENDING: AtomicBool = AtomicBool::new(false);
+
+unsafe fn announce() {
+    unsafe {
+        let model: usize = read(read::<usize>(CS_MENU_MAN) + MENU_MAN_ANNOUNCE_MODEL);
+        if model == 0 {
+            return log("F10: no announce model");
+        }
+        let text: Vec<u16> = ANNOUNCE_TEXT.encode_utf16().chain(std::iter::once(0)).collect();
+        let push: unsafe extern "system" fn(usize, *const u16) -> u8 = std::mem::transmute(ANNOUNCE_PUSH);
+        let pushed = push(model, text.as_ptr());
+        log(&format!("F10: announce model {model:#x}, push -> {pushed}, queued {}", read::<usize>(model + 0x30)));
+    }
+}
+
 unsafe extern "system" fn model_update_hook(model: usize, dt: f32, a: usize, b: usize) {
     unsafe {
         inject();
+        if ANNOUNCE_PENDING.swap(false, Ordering::Relaxed) {
+            announce();
+        }
         if DUMP_PENDING.swap(false, Ordering::Relaxed) {
             log("F9 dump, before update:");
             dump_model(model);
@@ -294,7 +317,7 @@ fn toggle_injection(mode: u8, key: &str) {
 }
 
 fn key_loop() {
-    let mut was_down = [false; 3];
+    let mut was_down = [false; 4];
     let mut pressed = |i: usize, key: i32| {
         let down = unsafe { GetAsyncKeyState(key) } as u16 & 0x8000 != 0;
         let edge = down && !was_down[i];
@@ -311,6 +334,10 @@ fn key_loop() {
         if pressed(2, VK_F9) {
             DUMP_PENDING.store(true, Ordering::Relaxed);
             log("F9: model dump at the next update");
+        }
+        if pressed(3, 0x79) {
+            ANNOUNCE_PENDING.store(true, Ordering::Relaxed);
+            log("F10: system announce at the next update");
         }
         std::thread::sleep(Duration::from_millis(50));
     }

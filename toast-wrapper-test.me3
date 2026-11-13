@@ -1,0 +1,19 @@
+profileVersion = "v1"
+
+# toast_wrapper TEST setup. Paths are relative to this file. Build first:
+#   cd dll && cargo build --release --features debug-hotkey,socket
+#   cd tests\client-test && cargo build --release
+# F7 test text, socket 127.0.0.1:48700 (tools\send_toast.py); the client test DLL shows "client OK" 20 s after
+# launch. Logs: Game\debug-logs\toast_wrapper.log, toast_wrapper_client_test.log.
+
+# Separate save: me3 copies the real save to this file on first launch and never touches the original.
+savefile = "ToastTest.sl2"
+
+[[supports]]
+game = "armoredcore6"
+
+[[natives]]
+path = 'dll\target\release\toast_wrapper.dll'
+
+[[natives]]
+path = 'tests\client-test\target\release\toast_wrapper_client_test.dll'
