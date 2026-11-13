@@ -73,3 +73,10 @@ MenuString direct pointer), F8 = stock toast (system message 5000), F9 = model d
 
 - How the sibling announce / tutorial toast / room announce movies are driven (CSMenuMan+0x20 builds another
   window with `0x140cce250`; Elden Ring's FeSystemAnnounceViewModel has a queue, this one has none).
+
+## Planned: Elden Ring support
+
+Make ac6_toast support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
+offsets in a per-game table, shared logic unchanged), together with gfx-reloader. Starting points: the ER Ghidra
+project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); fromsoftware-rs `crates/eldenring/src/cs/menu_man.rs`
+(`CSMenuManImp`, `FeSystemAnnounceView`, ui_states); me3's ER profile. Debug with `--disable-arxan`, test with it on.
