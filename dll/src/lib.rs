@@ -1,6 +1,6 @@
-//! toast_wrapper: one-line notifications for Armored Core VI mods, shown by the game's own system announce banner
-//! (a strip at the bottom of the screen). Other mods call the exports below (see README.md and
-//! client\toast_wrapper_client.rs).
+//! toast_wrapper: one-line notifications for Armored Core VI and Elden Ring mods, shown by the game's own system
+//! announce banner. Other mods call the exports below (see README.md and client\toast_wrapper_client.rs).
+//! game.rs holds the per-game parts.
 //!
 //! The game queues and plays the texts itself (fade in, scroll when too wide, fade out), one after another. This DLL
 //! only copies texts in and hands them to the game from the game thread, a few at a time as the game's queue (9
@@ -21,8 +21,6 @@ mod hotkey;
 mod socket;
 
 const API_VERSION: u32 = 2;
-/// The banner's text starts flush against the left screen edge; 18 spaces line it up with the key guide below it.
-const PADDING: &str = "                  "; // 18 spaces
 /// Longest text kept, in UTF-16 units.
 const MAX_TEXT: usize = 512;
 /// Most texts waiting for room in the game's queue.
@@ -47,7 +45,8 @@ pub(crate) fn show(text: &str) -> bool {
     if !HOOKED.load(Ordering::Relaxed) {
         return false;
     }
-    let mut wide: Vec<u16> = PADDING.encode_utf16().chain(text.encode_utf16()).take(MAX_TEXT).collect();
+    let padding = std::iter::repeat_n(b' ' as u16, game::padding());
+    let mut wide: Vec<u16> = padding.chain(text.encode_utf16()).take(MAX_TEXT).collect();
     wide.iter_mut().filter(|c| **c == 0).for_each(|c| *c = b' ' as u16);
     wide.push(0);
     let mut pending = PENDING.lock().unwrap();
@@ -99,9 +98,9 @@ extern "system" fn DllMain(_module: *mut std::ffi::c_void, reason: u32, _reserve
             let _ = LOG.set(Mutex::new(file));
         }
         match game::install() {
-            Ok(()) => {
+            Ok(game) => {
                 HOOKED.store(true, Ordering::Relaxed);
-                log(&format!("toast_wrapper {} (API {API_VERSION}): hooked", env!("CARGO_PKG_VERSION")));
+                log(&format!("toast_wrapper {} (API {API_VERSION}): hooked {}", env!("CARGO_PKG_VERSION"), game.name));
             }
             Err(e) => log(&format!("toast_wrapper: not hooked, texts are refused: {e}")),
         }
@@ -133,7 +132,7 @@ mod tests {
         };
         drain_pending(&mut push);
         assert_eq!(game_queue.len(), 9);
-        assert_eq!(game_queue[0], format!("{PADDING}t0"));
+        assert_eq!(game_queue[0], "t0"); // no game detected in tests: no padding
         assert_eq!(PENDING.lock().unwrap().len(), 3);
     }
 }

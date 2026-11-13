@@ -93,15 +93,20 @@ Elden Ring has no `01_SystemToast`, but both games have the same queued **system
 - toast_wrapper (this repo's DLL, from v0.2.0) uses this system: it hooks the controller update `0x140fd61a0`
   (controller, dt) and pushes waiting texts from there (game thread). Each short entry stays up about 13 s; a
   150-character line still fit without scrolling. The controller only plays while `CSMenuMan+0x6c8` is 0.
-- Not yet checked: ER at runtime; whether an entry can be changed or removed while it plays.
+- Not yet checked: whether an entry can be changed or removed while it plays.
+
+## Elden Ring (2026-11-13, toast_wrapper v0.3.0)
+
+- Window update: `FeSystemAnnounceView` vtable (`0x142aecc28`) slot +0x58 = `0x1408c5e10(view, dt)`, called by the
+  generic update at slot +0x10 (`0x140746870`). Same shape as AC6's: when `[CSMenuManImp+0x798]` is 0 and the view
+  is idle (+0xb10 == 0) with entries queued ([view+0xb00]+0x38), it takes the front one (`0x140842fa0`) and plays it.
+- ER's exe has the dynamic-base flag (DllCharacteristics 0x8160; AC6's is 0x8120, fixed at 0x140000000), so the DLL
+  uses offsets from the exe base in both games.
+- Runtime (Arxan on, game 1.17.2 = the analyzed Steam build 25827938): hooked, pushes play. The banner is a strip
+  near the top under the compass, already with a left margin (no padding). An entry stays up about 15 s. Nothing
+  plays on the title screen. The alt save (me3 `savefile`) loaded the real save's copy; the real `ER0000.sl2` was
+  backed up first as `ER0000.sl2.before-toast-wrapper-2026-11-13`.
 
 ## Open questions
 
 - How the tutorial toast / room announce movies are driven.
-
-## Planned: Elden Ring support
-
-Make toast_wrapper support both AC6 and Elden Ring in one DLL through the system announce (game detected at load,
-the addresses and offsets above in a per-game table, shared logic unchanged), together with gfx-reloader. Starting points: the ER Ghidra
-project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); fromsoftware-rs `crates/eldenring/src/cs/menu_man.rs`
-(`CSMenuManImp`, `FeSystemAnnounceView`, ui_states); me3's ER profile. Debug with `--disable-arxan`, test with it on.
