@@ -1,0 +1,9 @@
+# Build output
+target/
+__pycache__/
+
+# Local research data, not for the repo: decompiled game code, game text dumps, scripts with local paths
+/ghidra-out/
+/fmg-engus/
+/tools/ghidra.sh
+/tools/peread.py

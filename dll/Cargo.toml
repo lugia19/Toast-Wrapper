@@ -1,0 +1,18 @@
+[package]
+name = "ac6-toast"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Test-only extras, off by default: F7 / F8 test toasts, and a localhost command socket for external tools.
+debug-hotkey = []
+socket = []
+
+[dependencies]
+retour = "0.3"
+
+[profile.release]
+panic = "abort"

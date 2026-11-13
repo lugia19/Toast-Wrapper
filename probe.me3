@@ -1,0 +1,13 @@
+profileVersion = "v1"
+
+# Research probe (probe-dll; build with: cd probe-dll && cargo build --release). Paths are relative to this file.
+# Logs who sets the toast text and the toast model's state; F7 custom toast, F8 stock toast, F9 model dump.
+# Never load it together with ac6_toast.dll (same hook). Log: Game\debug-logs\system_toast_probe.log.
+
+savefile = "SystemToast.sl2"
+
+[[supports]]
+game = "armoredcore6"
+
+[[natives]]
+path = 'probe-dll\target\release\system_toast_probe.dll'
