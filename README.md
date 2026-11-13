@@ -4,6 +4,8 @@ One-line notifications for Armored Core VI mods (1.09.1, loaded with [me3](https
 They play in the game's own system announce banner, a strip at the bottom of the screen, with its fade in and out.
 One DLL owns the banner; any number of mods call it.
 
+![A text in the announce banner, in the garage](docs/screens/announce_garage.png)
+
 ## Using it
 
 1. Build: `cd dll && cargo build --release` → `dll\target\release\toast_wrapper.dll` (or take it from the releases).
