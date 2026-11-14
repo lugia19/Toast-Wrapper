@@ -2,9 +2,11 @@
 //! (the game thread). Armored Core VI and Elden Ring share this system; only the addresses below differ.
 //! Background: ..\..\docs\how-it-works.md.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use retour::RawDetour;
+
+use crate::playback::{Banner, Playback};
 
 type UpdateFn = unsafe extern "system" fn(usize, f32, usize, usize);
 type PushFn = unsafe extern "system" fn(usize, *const u16) -> bool;
@@ -22,6 +24,10 @@ pub struct Game {
     push_prologue: [u8; 8],
     /// Window field: the announce model.
     window_model: usize,
+    /// Model field: entries in its queue (the playing one stays at the front until the game dequeues it).
+    model_count: usize,
+    /// Window field: the play state byte, followed by the fields in `playback::Banner`.
+    window_state: usize,
     /// Leading spaces, so the text doesn't start flush against the screen edge.
     pub padding: usize,
 }
@@ -38,6 +44,8 @@ const GAMES: [Game; 2] = [
         push_rva: 0xe79dd0,
         push_prologue: PUSH_PROLOGUE,
         window_model: 0x5b8,
+        model_count: 0x30,
+        window_state: 0x610,
         padding: 18,
     },
     // Elden Ring (Steam build 25827938): CS::FeSystemAnnounceView (vtable slot +0x58); model =
@@ -50,6 +58,8 @@ const GAMES: [Game; 2] = [
         push_rva: 0x843000,
         push_prologue: PUSH_PROLOGUE,
         window_model: 0xb00,
+        model_count: 0x38,
+        window_state: 0xb50,
         padding: 0,
     },
 ];
@@ -57,20 +67,59 @@ const GAMES: [Game; 2] = [
 static GAME: OnceLock<&'static Game> = OnceLock::new();
 static ORIG_UPDATE: OnceLock<UpdateFn> = OnceLock::new();
 static PUSH: OnceLock<PushFn> = OnceLock::new();
+/// Durations of the texts in the game's queue and on screen (game thread only).
+static PLAYBACK: Mutex<Playback> = Mutex::new(Playback::new());
 
 unsafe extern "system" {
     fn GetModuleHandleW(name: *const u16) -> usize;
     fn GetModuleFileNameW(module: usize, buffer: *mut u16, size: u32) -> u32;
 }
 
+unsafe fn read_banner(at: usize) -> Banner {
+    unsafe {
+        Banner {
+            state: std::ptr::read(at as *const u8),
+            timer: std::ptr::read((at + Banner::TIMER) as *const f32),
+            passes: std::ptr::read((at + Banner::PASSES) as *const i32),
+            scrolls: std::ptr::read((at + Banner::SCROLLS) as *const u8) != 0,
+            scroll_offset: std::ptr::read((at + Banner::SCROLL_OFFSET) as *const i32),
+        }
+    }
+}
+
+unsafe fn write_banner(at: usize, banner: &Banner) {
+    unsafe {
+        std::ptr::write(at as *mut u8, banner.state);
+        std::ptr::write((at + Banner::TIMER) as *mut f32, banner.timer);
+        std::ptr::write((at + Banner::PASSES) as *mut i32, banner.passes);
+    }
+}
+
 unsafe extern "system" fn update_hook(window: usize, dt: f32, a: usize, b: usize) {
     unsafe {
-        let model = std::ptr::read((window + GAME.get().unwrap().window_model) as *const usize);
-        if model != 0 {
-            let push = PUSH.get().unwrap();
-            crate::drain_pending(|text| push(model, text.as_ptr()));
+        let game = GAME.get().unwrap();
+        let model = std::ptr::read((window + game.window_model) as *const usize);
+        if model == 0 {
+            return ORIG_UPDATE.get().unwrap()(window, dt, a, b);
         }
+        let mut playback = PLAYBACK.lock().unwrap();
+        let push = PUSH.get().unwrap();
+        crate::drain_pending(|pending| {
+            let pushed = push(model, pending.text.as_ptr());
+            if pushed {
+                playback.pushed(pending.duration);
+            }
+            pushed
+        });
+        let banner = window + game.window_state;
+        let before = read_banner(banner);
         ORIG_UPDATE.get().unwrap()(window, dt, a, b);
+        let game_wrote = read_banner(banner);
+        let game_queued = std::ptr::read((model + game.model_count) as *const usize);
+        let ours = playback.after_update(game_queued, before, game_wrote, dt);
+        if ours != game_wrote {
+            write_banner(banner, &ours);
+        }
     }
 }
 

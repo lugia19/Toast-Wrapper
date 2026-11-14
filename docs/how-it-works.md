@@ -34,6 +34,28 @@ exe's base in both games.
 - **One hook**, on the window update: before the original runs, it pushes waiting texts into the game's queue until
   the game reports it full. The game copies each text, so the DLL frees its copy right away.
 - Pushing happens on the game thread because the game reads and dequeues the same queue there.
-- The earlier design drove AC6's `01_SystemToast` (top-left, one text slot cleared every frame) with its own queue
-  and timing. It's kept in `research-notes.md` and the `probe-dll\` research probe; the announce banner replaced it
-  because both games have it and it already queues and plays texts itself.
+
+## Durations (`toast_wrapper_show_for`)
+
+The window plays each entry through a state machine (AC6 `0x140fd6400`, Elden Ring `0x1408c5f10`, same states as
+fromsoftware-rs' `SystemAnnounceViewModelState`): 1 load, 2 fade in, then for a short text 5 set the wait timer
+(AC6 15.0 s; Elden Ring a param, 15 s), 6 wait; for a scrolling text 3 a 3 s pause, 6 scroll, 7-8 another pause,
+9 repeat (AC6 3 passes, Elden Ring a param, 10 by default); then 10 hide, 11 fade out, 12 dequeue, 0 idle. The state
+byte is at AC6 controller+0x610 / Elden Ring view+0xb50, followed in both games by the wait timer (+0x4, f32), the
+passes left (+0x8), the scroll flag (+0xc) and the scroll offset (+0x10).
+
+The hook reads those fields before and after the game's update (`dll\src\playback.rs`, unit tested):
+
+- The DLL keeps each pushed text's duration in a list that mirrors the game's queue (count at AC6 model+0x30 /
+  Elden Ring model+0x38): the playing entry stays at the front until the game dequeues it in state 12, so the front
+  duration is the playing one, and whatever the game drops (a cleared queue) drops out of the list too.
+- Time counts only on frames where these fields changed, so pauses (the window paused, menus) don't use it up. The
+  fade-in changes none of them, so it isn't counted: a text is up for its duration plus the fades.
+- A short text's wait timer is replaced by an hour, a scrolling text's passes by 1000, so the game's own end never
+  comes first; once the duration is up the state jumps to 10, and the game's fade-out follows.
+
+## History
+
+The earlier design drove AC6's `01_SystemToast` (top-left, one text slot cleared every frame) with its own queue and
+timing. It's kept in `research-notes.md` and the `probe-dll\` research probe; the announce banner replaced it because
+both games have it and it already queues and plays texts itself.

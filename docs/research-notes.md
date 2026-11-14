@@ -93,7 +93,7 @@ Elden Ring has no `01_SystemToast`, but both games have the same queued **system
 - toast_wrapper (this repo's DLL, from v0.2.0) uses this system: it hooks the controller update `0x140fd61a0`
   (controller, dt) and pushes waiting texts from there (game thread). Each short entry stays up about 13 s; a
   150-character line still fit without scrolling. The controller only plays while `CSMenuMan+0x6c8` is 0.
-- Not yet checked: whether an entry can be changed or removed while it plays.
+- An entry can be cut short while it plays by setting its state to 10 (hide); see "Play states and durations".
 
 ## Elden Ring (2026-11-13, toast_wrapper v0.3.0)
 
@@ -106,6 +106,25 @@ Elden Ring has no `01_SystemToast`, but both games have the same queued **system
   near the top under the compass, already with a left margin (no padding). An entry stays up about 15 s. Nothing
   plays on the title screen. The alt save (me3 `savefile`) loaded the real save's copy; the real `ER0000.sl2` was
   backed up first as `ER0000.sl2.before-toast-wrapper-2026-11-13`.
+
+## Play states and durations (2026-11-14, toast_wrapper v0.4.0)
+
+- State machine: AC6 `0x140fd6400(controller, dt)`, Elden Ring `0x1408c5f10(view, dt)`, called from the window
+  update when an entry is active. State byte AC6 +0x610 / ER +0xb50; then wait timer f32 (+0x4), passes left i32
+  (+0x8), scrolls byte (+0xc), scroll offset i32 (+0x10), scroll end i32 (+0x14). Same in both games.
+- States: 1 load (measures the text: scrolls?, scroll end; passes = 1, or 3 when scrolling in AC6; ER: 1, or param
+  +0x6c, 10 without the param), 2 FadeIn (waits for the animation), 3 scrolling: timer = 3.0 (ER param +0x60) /
+  short: timer 0, 4 wait, 5 short: timer = 15.0 (`0x41700000`; ER param +0x68), 6 short: wait / scrolling: advance
+  the offset (AC6 `dt * [0x1439af2c0]`, ER param +0x64 or 500 px/s) until the end, 7 scrolling: timer = 3.0 / short:
+  0, 8 wait, 9 passes -= 1, back to 3 while > 0, 10 hide (visible flag off), 11 FadeOut, 12 dequeue and clear the
+  active flag; the state then wraps to 0. ER's params come from a row `0x140d31580` returns (not identified).
+- toast_wrapper's durations (`dll\src\playback.rs`): after each update, a short text entering 6 gets a 3600 s timer,
+  a scrolling text gets 1000 passes once it's past load, and when the duration is up (counted only on frames where
+  these fields changed) the state is set to 10. Durations sit in a list that mirrors the game's queue (count at
+  AC6 model+0x30 / ER model+0x38; the playing entry is only dequeued in state 12: AC6 `0x140e79cf0`, ER `0x140842fe0`;
+  the "next entry" helpers `0x140e79cb0` / `0x140842fa0` only peek at the front).
+- Runtime, both games, Arxan on: 3 s, 20 s (past the game's 15 s) and 6 s / 8 s texts stayed up for those times;
+  the 8 s Elden Ring text scrolled and was cut mid-scroll with the normal fade-out. ~0.5 s between texts.
 
 ## Open questions
 

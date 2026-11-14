@@ -17,17 +17,26 @@ use std::sync::{Mutex, OnceLock};
 mod game;
 #[cfg(feature = "debug-hotkey")]
 mod hotkey;
+mod playback;
 #[cfg(feature = "socket")]
 mod socket;
 
-const API_VERSION: u32 = 2;
+/// 2: show. 3: show_for (custom durations).
+const API_VERSION: u32 = 3;
 /// Longest text kept, in UTF-16 units.
 const MAX_TEXT: usize = 512;
 /// Most texts waiting for room in the game's queue.
 const MAX_PENDING: usize = 64;
 
-/// Texts not yet handed to the game: UTF-16, null-terminated, padded.
-static PENDING: Mutex<VecDeque<Vec<u16>>> = Mutex::new(VecDeque::new());
+/// A text not yet handed to the game.
+pub(crate) struct Pending {
+    /// UTF-16, null-terminated, padded.
+    pub text: Vec<u16>,
+    /// Seconds on screen; None = the game's own timing.
+    pub duration: Option<f32>,
+}
+
+static PENDING: Mutex<VecDeque<Pending>> = Mutex::new(VecDeque::new());
 /// The game hook is installed; without it texts would only pile up.
 static HOOKED: AtomicBool = AtomicBool::new(false);
 static LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
@@ -40,8 +49,9 @@ pub(crate) fn log(line: &str) {
     }
 }
 
-/// Queues a text for the banner. False if the DLL isn't hooked or too many texts are waiting.
-pub(crate) fn show(text: &str) -> bool {
+/// Queues a text for the banner, on screen for `seconds` (None: the game's own timing). False if the DLL isn't hooked
+/// or too many texts are waiting.
+pub(crate) fn show(text: &str, seconds: Option<f32>) -> bool {
     if !HOOKED.load(Ordering::Relaxed) {
         return false;
     }
@@ -53,15 +63,15 @@ pub(crate) fn show(text: &str) -> bool {
     if pending.len() >= MAX_PENDING {
         return false;
     }
-    pending.push_back(wide);
+    pending.push_back(Pending { text: wide, duration: seconds.filter(|s| *s > 0.0) });
     true
 }
 
 /// Game thread: hands waiting texts to `push` (the game copies them) until it reports its queue full.
-pub(crate) fn drain_pending(mut push: impl FnMut(&[u16]) -> bool) {
+pub(crate) fn drain_pending(mut push: impl FnMut(&Pending) -> bool) {
     let mut pending = PENDING.lock().unwrap();
-    while let Some(text) = pending.front() {
-        if !push(text) {
+    while let Some(next) = pending.front() {
+        if !push(next) {
             break;
         }
         pending.pop_front();
@@ -82,8 +92,23 @@ pub extern "C" fn toast_wrapper_api_version() -> u32 {
 /// `text` points at `len` bytes, or is null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn toast_wrapper_show(text: *const u8, len: usize) -> bool {
+    show(&unsafe { text_arg(text, len) }, None)
+}
+
+/// Like `toast_wrapper_show`, but the text stays on screen for `seconds` (plus the fade in and out), longer or
+/// shorter than the game's own timing. 0 or less: the game's own timing. API version 3.
+///
+/// # Safety
+/// `text` points at `len` bytes, or is null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn toast_wrapper_show_for(text: *const u8, len: usize, seconds: f32) -> bool {
+    show(&unsafe { text_arg(text, len) }, Some(seconds))
+}
+
+/// UTF-8 from a caller's pointer and length (invalid sequences become U+FFFD).
+unsafe fn text_arg<'a>(text: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
     let bytes = if text.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(text, len) } };
-    show(&String::from_utf8_lossy(bytes))
+    String::from_utf8_lossy(bytes)
 }
 
 // ---- setup -------------------------------------------------------------------------------------------------------------
@@ -120,14 +145,14 @@ mod tests {
     fn drains_until_the_game_queue_is_full() {
         HOOKED.store(true, Ordering::Relaxed);
         for i in 0..12 {
-            assert!(show(&format!("t{i}")));
+            assert!(show(&format!("t{i}"), None));
         }
         let mut game_queue: Vec<String> = Vec::new();
-        let mut push = |text: &[u16]| {
+        let mut push = |pending: &Pending| {
             if game_queue.len() >= 9 {
                 return false;
             }
-            game_queue.push(String::from_utf16_lossy(&text[..text.len() - 1]));
+            game_queue.push(String::from_utf16_lossy(&pending.text[..pending.text.len() - 1]));
             true
         };
         drain_pending(&mut push);

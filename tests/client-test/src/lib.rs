@@ -8,7 +8,8 @@ fn run() {
     std::thread::sleep(std::time::Duration::from_secs(20));
     let version = toast_wrapper_client::api_version();
     let shown = version.is_some_and(|v| toast_wrapper_client::show(&format!("client OK (API {v})")));
-    let line = format!("api_version {version:?}, show -> {shown}\n");
+    let shown_for = toast_wrapper_client::show_for("client show_for OK (4 s)", 4.0);
+    let line = format!("api_version {version:?}, show -> {shown}, show_for -> {shown_for}\n");
     let log = std::env::current_exe().unwrap().with_file_name("debug-logs").join("toast_wrapper_client_test.log");
     let _ = std::fs::write(log, line);
 }

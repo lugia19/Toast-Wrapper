@@ -123,7 +123,7 @@ checksum = "7a3d689654af89bdfeba29a914ab6ac0236d382eb3b764f7454dde052f2821f8"
 
 [[package]]
 name = "toast-wrapper"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "retour",
 ]
