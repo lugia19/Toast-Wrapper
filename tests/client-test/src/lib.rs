@@ -1,5 +1,4 @@
-//! Test DLL for client\toast_wrapper_client.rs: 20 s after load, shows "client OK (API n)" through toast_wrapper.dll,
-//! and logs the result to Game\debug-logs\toast_wrapper_client_test.log (also when toast_wrapper.dll isn't loaded).
+//! Client test: 20 s after load shows "client OK (API n)"; result in Game\debug-logs\toast_wrapper_client_test.log.
 
 #[path = "../../../client/toast_wrapper_client.rs"]
 mod toast_wrapper_client;

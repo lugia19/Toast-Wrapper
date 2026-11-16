@@ -1,5 +1,4 @@
-//! Test keys (feature `debug-hotkey`), polled every 50 ms: F7 queues a numbered test text with the game's own timing,
-//! F8 one that stays 3 s (press them a few times to see the queue).
+//! Test keys (feature `debug-hotkey`): F7 test text, game timing; F8 test text, 3 s.
 
 use std::time::Duration;
 
@@ -10,7 +9,6 @@ unsafe extern "system" {
 const VK_F7: i32 = 0x76;
 const VK_F8: i32 = 0x77;
 
-/// True on the poll where `key` goes down.
 fn pressed(key: i32, was_down: &mut bool) -> bool {
     let down = unsafe { GetAsyncKeyState(key) } as u16 & 0x8000 != 0;
     let edge = down && !*was_down;

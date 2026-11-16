@@ -1,14 +1,13 @@
-//! Command socket for external tools (feature `socket`): TCP 127.0.0.1:48700, one command per line, one reply line.
-//!   show <text>                -> 1 (queued) / 0 (refused)
-//!   showfor <seconds> <text>   -> same, on screen for that long
-//! Anything else gets `error: <why>`. Test client: tools\send_toast.py.
+//! Test socket (feature `socket`), one command per line, client tools\send_toast.py:
+//!   show <text>               -> 1 queued / 0 refused
+//!   showfor <seconds> <text>  -> same
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 
 const ADDRESS: &str = "127.0.0.1:48700";
 
-/// Listens on its own thread (binding initializes Winsock, which must not happen inside DllMain).
+// Own thread: binding initializes Winsock, not allowed in DllMain.
 pub fn start() {
     std::thread::spawn(|| {
         let listener = match TcpListener::bind(ADDRESS) {

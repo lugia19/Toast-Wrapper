@@ -1,13 +1,6 @@
-//! toast_wrapper: one-line notifications for Armored Core VI and Elden Ring mods, shown by the game's own system
-//! announce banner. Other mods call the exports below (see README.md and client\toast_wrapper_client.rs).
-//! game.rs holds the per-game parts.
-//!
-//! The game queues and plays the texts itself (fade in, scroll when too wide, fade out), one after another. This DLL
-//! only copies texts in and hands them to the game from the game thread, a few at a time as the game's queue (9
-//! entries) has room.
-//!
-//! API stability: an existing export's signature never changes; new behaviour gets a new export and a higher
-//! `API_VERSION`, so a client only has to check the version is at least the one it was written for.
+//! toast_wrapper: mod notifications through the game's system announce banner (AC6, Elden Ring).
+//! The game plays the texts; we feed its 9-entry queue from the game thread.
+//! Exports never change signature; new behavior = new export + higher API_VERSION.
 
 use std::collections::VecDeque;
 use std::io::Write as _;
@@ -21,23 +14,19 @@ mod playback;
 #[cfg(feature = "socket")]
 mod socket;
 
-/// 2: show. 3: show_for (custom durations).
+/// 2: show. 3: show_for.
 const API_VERSION: u32 = 3;
-/// Longest text kept, in UTF-16 units.
-const MAX_TEXT: usize = 512;
-/// Most texts waiting for room in the game's queue.
+const MAX_TEXT: usize = 512; // UTF-16 units
 const MAX_PENDING: usize = 64;
 
-/// A text not yet handed to the game.
 pub(crate) struct Pending {
     /// UTF-16, null-terminated, padded.
     pub text: Vec<u16>,
-    /// Seconds on screen; None = the game's own timing.
+    /// None = the game's own timing.
     pub duration: Option<f32>,
 }
 
 static PENDING: Mutex<VecDeque<Pending>> = Mutex::new(VecDeque::new());
-/// The game hook is installed; without it texts would only pile up.
 static HOOKED: AtomicBool = AtomicBool::new(false);
 static LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
@@ -49,8 +38,7 @@ pub(crate) fn log(line: &str) {
     }
 }
 
-/// Queues a text for the banner, on screen for `seconds` (None: the game's own timing). False if the DLL isn't hooked
-/// or too many texts are waiting.
+/// False if not hooked or the pending list is full.
 pub(crate) fn show(text: &str, seconds: Option<f32>) -> bool {
     if !HOOKED.load(Ordering::Relaxed) {
         return false;
@@ -67,7 +55,7 @@ pub(crate) fn show(text: &str, seconds: Option<f32>) -> bool {
     true
 }
 
-/// Game thread: hands waiting texts to `push` (the game copies them) until it reports its queue full.
+/// Game thread. `push` returns false when the game's queue is full.
 pub(crate) fn drain_pending(mut push: impl FnMut(&Pending) -> bool) {
     let mut pending = PENDING.lock().unwrap();
     while let Some(next) = pending.front() {
@@ -85,8 +73,7 @@ pub extern "C" fn toast_wrapper_api_version() -> u32 {
     API_VERSION
 }
 
-/// Queues `len` bytes of UTF-8 text for the banner (invalid sequences become U+FFFD). Returns false if the DLL
-/// couldn't hook the game or 64 texts are already waiting.
+/// Queues `len` bytes of UTF-8 (invalid -> U+FFFD). False if not hooked or 64 texts are waiting.
 ///
 /// # Safety
 /// `text` points at `len` bytes, or is null.
@@ -95,8 +82,7 @@ pub unsafe extern "C" fn toast_wrapper_show(text: *const u8, len: usize) -> bool
     show(&unsafe { text_arg(text, len) }, None)
 }
 
-/// Like `toast_wrapper_show`, but the text stays on screen for `seconds` (plus the fade in and out), longer or
-/// shorter than the game's own timing. 0 or less: the game's own timing. API version 3.
+/// `toast_wrapper_show`, on screen for `seconds` (plus fades); <= 0 = the game's timing. API 3.
 ///
 /// # Safety
 /// `text` points at `len` bytes, or is null.
@@ -105,7 +91,6 @@ pub unsafe extern "C" fn toast_wrapper_show_for(text: *const u8, len: usize, sec
     show(&unsafe { text_arg(text, len) }, Some(seconds))
 }
 
-/// UTF-8 from a caller's pointer and length (invalid sequences become U+FFFD).
 unsafe fn text_arg<'a>(text: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
     let bytes = if text.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(text, len) } };
     String::from_utf8_lossy(bytes)
@@ -157,7 +142,7 @@ mod tests {
         };
         drain_pending(&mut push);
         assert_eq!(game_queue.len(), 9);
-        assert_eq!(game_queue[0], "t0"); // no game detected in tests: no padding
+        assert_eq!(game_queue[0], "t0"); // no game in tests: no padding
         assert_eq!(PENDING.lock().unwrap().len(), 3);
     }
 }

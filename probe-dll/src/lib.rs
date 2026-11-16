@@ -1,19 +1,9 @@
-//! system-toast probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0): how `01_SystemToast` is driven.
-//!
-//! Static findings this checks (Ghidra, see docs\research-notes.md):
-//! - CSMenuMan (`[0x144e15530]`) +0x6f8 = toast model. Its text (a MenuString at model+0x08) is set through
-//!   0x140dc25e0(MenuString*), and CSMenuMan's frame update ticks the model (0x140e976b0(model, dt)) and then clears the
-//!   text, so a toast only stays while someone sets the text every frame.
-//! - Model update: requested = text non-empty; +0x98 = last request, +0x99 = shown, +0x9c = hold timer (1 s after
-//!   the text stops); then copies the text to model+0x58. The window controller reads `*[model+0x48]` (= +0x99) as
-//!   its show / hide bool (FadeIn / FadeOut) and the text at model+0x08 for `ItemList/Text_0`.
-//! - MenuString: +0x00 direct wchar pointer (FMG data, or null), +0x08 owned DLString (allocator +0x08, buffer
-//!   +0x10, length +0x20, capacity +0x28), +0x38 extra. 0x140cb1ec0(out, id) = System_Message FMG text (category 0xcb).
-//!   Never keep a game-made MenuString past its frame: its direct pointer goes into FMG data that the game replaces
-//!   when it loads (a stock string kept from the title screen showed mission text in the garage).
-//!
-//! Keys (polled every 50 ms; never F6): F7 toggles a custom toast (our own text), F8 toggles a stock one (system
-//! message 5000), F9 dumps the model. Log: Game\debug-logs\system_toast_probe.log.
+//! system-toast probe (AC6 1.09.1): how `01_SystemToast` is driven. Findings: docs\research-notes.md.
+//! Toast model = [CSMenuMan+0x6f8]; its frame update clears the text, so it must be set every frame.
+//! MenuString: +0x00 direct wchar* (into FMG data: never keep one past its frame), +0x08 DLString
+//! (allocator +0x08, buffer +0x10, length +0x20, capacity +0x28).
+//! Keys: F7 custom toast, F8 stock toast (message 5000), F9 dump model, F10 announce.
+//! Log: Game\debug-logs\system_toast_probe.log.
 
 use std::ffi::c_void;
 use std::io::Write as _;
@@ -26,18 +16,15 @@ use retour::RawDetour;
 
 const CS_MENU_MAN: usize = 0x144e15530;
 
-/// Sets the toast text: copies a MenuString into [CSMenuMan+0x6f8]+0x08.
-const SET_TEXT_ADDR: usize = 0x140dc25e0;
+const SET_TEXT_ADDR: usize = 0x140dc25e0; // (MenuString*) -> model+0x08
 const SET_TEXT_PROLOGUE: [u8; 6] = [0x48, 0x8b, 0xd1, 0x48, 0x8b, 0x0d];
-/// Toast model per-frame update (model, dt).
-const MODEL_UPDATE_ADDR: usize = 0x140e976b0;
+const MODEL_UPDATE_ADDR: usize = 0x140e976b0; // (model, dt)
 const MODEL_UPDATE_PROLOGUE: [u8; 8] = [0x40, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0xc7];
-/// MenuString default constructor (empty) and System_Message lookup (out, id).
 const MENU_STRING_EMPTY: usize = 0x140442520;
-const SYSTEM_MESSAGE: usize = 0x140cb1ec0;
+const SYSTEM_MESSAGE: usize = 0x140cb1ec0; // (out, id), FMG category 0xcb
 
 const MODEL_TEXT: usize = 0x08;
-const MODEL_SHOW_PTR: usize = 0x48;
+const MODEL_SHOW_PTR: usize = 0x48; // -> +0x99, the controller's show bool
 const MODEL_SHOWN_TEXT: usize = 0x58;
 const MODEL_REQUESTED: usize = 0x98;
 const MODEL_SHOWN: usize = 0x99;
@@ -59,15 +46,12 @@ static DUMP_PENDING: AtomicBool = AtomicBool::new(false);
 static ORIG_SET_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIG_MODEL_UPDATE: AtomicUsize = AtomicUsize::new(0);
 
-/// Room for a MenuString (0x40 bytes; twice that in case the layout is off).
+// MenuString is 0x40; doubled for safety.
 #[repr(C, align(16))]
 struct MenuStringBuf([u8; 0x80]);
 
-/// Our custom MenuString (empty, direct pointer to our own UTF-16 text), built on the game thread on first use and
-/// leaked with its text, so the pointer stays valid as long as the game may read it.
-static CUSTOM: OnceLock<usize> = OnceLock::new();
+static CUSTOM: OnceLock<usize> = OnceLock::new(); // leaked
 
-/// Last logged text set (text, callers) and model state (model, (requested, shown, show flag)), to log changes only.
 static LAST_SET: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
 static LAST_STATE: Mutex<(usize, (u8, u8, Option<u8>))> = Mutex::new((0, (0, 0, None)));
 
@@ -89,7 +73,6 @@ fn log(line: &str) {
     }
 }
 
-/// Return addresses of the hook's callers inside the game exe.
 fn callers() -> String {
     let mut frames = [0usize; 10];
     let n = unsafe { RtlCaptureStackBackTrace(2, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut()) };
@@ -117,7 +100,7 @@ unsafe fn wide_str(ptr: *const u16, max: usize) -> String {
     String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-/// A MenuString's text: the direct pointer if set, else the DLString's buffer (inline up to 7 chars).
+// Direct pointer, else the DLString (inline up to 7 chars).
 unsafe fn menu_string(s: usize) -> String {
     unsafe {
         let direct: usize = read(s);
@@ -130,8 +113,7 @@ unsafe fn menu_string(s: usize) -> String {
     }
 }
 
-/// Frees a game-made MenuString's DLString heap buffer, like the game's inlined destructor: when capacity > 7, the
-/// allocator (+0x08) frees the buffer (+0x10) through vfunc +0x68.
+// As the game's inlined destructor: allocator vfunc +0x68.
 unsafe fn free_menu_string(s: usize) {
     unsafe {
         if read::<usize>(s + 0x28) > 7 {
@@ -143,7 +125,6 @@ unsafe fn free_menu_string(s: usize) {
     }
 }
 
-/// The model's show bool, `*[model+0x48]` (None while the pointer is null).
 unsafe fn show_flag(model: usize) -> Option<u8> {
     unsafe {
         let ptr: usize = read(model + MODEL_SHOW_PTR);
@@ -151,7 +132,7 @@ unsafe fn show_flag(model: usize) -> Option<u8> {
     }
 }
 
-/// Calls the game's set-text function, skipping our logging detour.
+// Skips our logging detour.
 unsafe fn set_text(menu_string: usize) {
     unsafe {
         let orig: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_SET_TEXT.load(Ordering::Relaxed));
@@ -217,8 +198,7 @@ unsafe fn custom_menu_string() -> usize {
     })
 }
 
-/// Sets our text for this frame. The game's own toasts are online-only (Versus Room), and modded play is never
-/// online, so there's nothing to share the slot with.
+// The game's own toasts are online-only, so the slot is ours.
 unsafe fn inject() {
     unsafe {
         let mode = INJECT.load(Ordering::Relaxed);
@@ -228,7 +208,6 @@ unsafe fn inject() {
         if mode == INJECT_CUSTOM {
             set_text(custom_menu_string());
         } else {
-            // Fetched every frame, like the game does (see the module comment).
             let system_message: unsafe extern "system" fn(usize, i32) -> usize = std::mem::transmute(SYSTEM_MESSAGE);
             let mut temp = MenuStringBuf([0; 0x80]);
             let s = temp.0.as_mut_ptr() as usize;
@@ -239,8 +218,7 @@ unsafe fn inject() {
     }
 }
 
-/// System announce (the same queued system as Elden Ring's FeSystemAnnounceViewModel): 0x140e79dd0(model, wchar*)
-/// pushes a copy of the text if fewer than 9 are queued; model = [CSMenuMan+0x6f0] (deque at +0x08, count +0x30).
+// System announce: push(model, wchar*) copies the text if < 9 queued; count at model+0x30.
 const ANNOUNCE_PUSH: usize = 0x140e79dd0;
 const MENU_MAN_ANNOUNCE_MODEL: usize = 0x6f0;
 const ANNOUNCE_TEXT: &str = "system-toast probe: system announce test, a longer line to see whether it scrolls across the banner";

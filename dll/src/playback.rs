@@ -1,11 +1,7 @@
-//! Custom durations, game-free so it can be unit tested. The game hook reads the banner's play state before and after
-//! the game's own update, and `after_update` returns it adjusted for the text on screen.
-//!
-//! The banner plays each entry through a fixed state machine (same in AC6 and Elden Ring): 1 load, 2 fade in, then
-//! either (short text) 5 set the wait timer, 6 wait, or (scrolling text) 3-8 scroll passes, 9 repeat check, then
-//! 10 hide, 11 fade out, 12 dequeue, back to 0 (idle). For a text with a duration, the game's own end is pushed out
-//! of the way (a very long wait, many scroll passes) and the DLL jumps to 10 once the duration is up, so the game's
-//! normal fade-out follows.
+//! Custom durations (game-free, unit tested).
+//! Banner states (AC6 and ER): 1 load, 2 fade in, short text 5 set timer / 6 wait, scrolling 3-8 passes /
+//! 9 repeat check, then 10 hide, 11 fade out, 12 dequeue, 0 idle. With a duration we push the game's own end
+//! away (long wait, many passes) and jump to 10 when time is up.
 
 use std::collections::VecDeque;
 
@@ -14,24 +10,18 @@ const FADE_IN: u8 = 2;
 const WAIT: u8 = 6;
 const REPEAT_CHECK: u8 = 9;
 const HIDE: u8 = 10;
-/// Wait timer for short texts with a duration: long enough to never end on its own, short enough that a frame's dt
-/// still changes it (the DLL counts time only on frames where the banner moved).
+// Small enough that dt still changes it: elapsed only counts frames where the banner moved.
 const HOLD_SECONDS: f32 = 3600.0;
-/// Scroll passes for scrolling texts with a duration (the game uses 3 in AC6, a param in Elden Ring).
-const MANY_PASSES: i32 = 1000;
+const MANY_PASSES: i32 = 1000; // game: 3 in AC6, a param in ER
 
-/// The banner's play-state fields, laid out the same way in both games from the state byte on (offsets below).
+/// Same layout in both games, from the state byte.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Banner {
     pub state: u8,
-    /// Seconds left in the current wait.
     pub timer: f32,
-    /// Scroll passes left.
     pub passes: i32,
-    /// The text is wider than the screen and scrolls.
     pub scrolls: bool,
-    /// Current scroll position, in pixels. Only read to tell whether the banner moved: while scrolling, nothing else
-    /// changes.
+    /// Only read to tell whether the banner moved (nothing else changes while scrolling).
     pub scroll_offset: i32,
 }
 
@@ -43,10 +33,8 @@ impl Banner {
 }
 
 pub struct Playback {
-    /// Durations of the entries in the game's queue (None: the game's own timing), front = the one playing or next.
-    /// Kept the same length as the game's queue, so entries the game drops (a cleared queue) drop out here too.
+    /// Mirrors the game's queue length, so entries it drops drop here too.
     queued: VecDeque<Option<f32>>,
-    /// Seconds the banner has been moving through the front entry.
     elapsed: f32,
 }
 
@@ -55,13 +43,11 @@ impl Playback {
         Playback { queued: VecDeque::new(), elapsed: 0.0 }
     }
 
-    /// A text was pushed into the game's queue.
     pub fn pushed(&mut self, duration: Option<f32>) {
         self.queued.push_back(duration);
     }
 
-    /// After the game's update: `game_queued` = entries in the game's queue (the playing one included, until the game
-    /// dequeues it), `before` / `after` = the banner's fields around the update. Returns the fields to write back.
+    /// `game_queued` includes the playing entry. Returns the fields to write back.
     pub fn after_update(&mut self, game_queued: usize, before: Banner, after: Banner, dt: f32) -> Banner {
         while self.queued.len() > game_queued {
             self.queued.pop_front();
@@ -94,8 +80,7 @@ mod tests {
 
     const FRAME: f32 = 1.0 / 60.0;
 
-    /// A simplified short-text run of the game's state machine: load and fade in take a frame each, the wait is
-    /// 15 s, then hide, fade out, and dequeue (which shrinks the game's queue).
+    /// Simplified short-text state machine, 15 s wait.
     fn game_step(b: &mut Banner, game_queued: &mut usize) {
         match b.state {
             IDLE if *game_queued > 0 => b.state = FADE_IN,
@@ -168,7 +153,7 @@ mod tests {
         let before = Banner::default();
         let mut b = p.after_update(n, before, Banner { state: FADE_IN, ..before }, FRAME);
         for _ in 0..600 {
-            b = p.after_update(n, b, b, FRAME); // the game didn't run its state machine
+            b = p.after_update(n, b, b, FRAME); // game paused
         }
         assert_eq!(b.state, FADE_IN);
     }
@@ -185,10 +170,10 @@ mod tests {
     fn a_cleared_game_queue_resyncs() {
         let (mut p, _) = queue(&[Some(2.0), Some(3.0)]);
         let idle = Banner::default();
-        p.after_update(0, idle, idle, FRAME); // the game dropped both entries
+        p.after_update(0, idle, idle, FRAME); // game dropped both
         p.pushed(None);
         let mut n = 1;
-        assert!(run(&mut p, &mut n, 10_000) > 800); // the new entry keeps the game's timing
+        assert!(run(&mut p, &mut n, 10_000) > 800);
     }
 
     #[test]

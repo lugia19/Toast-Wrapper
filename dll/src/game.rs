@@ -1,6 +1,5 @@
-//! The game side: hands queued texts to the game's own system announce, from the announce window's per-frame update
-//! (the game thread). Armored Core VI and Elden Ring share this system; only the addresses below differ.
-//! Background: ..\..\docs\how-it-works.md.
+//! Game side: feeds the announce queue from the announce window's update. Per-game addresses below.
+//! See docs\how-it-works.md.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -11,24 +10,21 @@ use crate::playback::{Banner, Playback};
 type UpdateFn = unsafe extern "system" fn(usize, f32, usize, usize);
 type PushFn = unsafe extern "system" fn(usize, *const u16) -> bool;
 
-/// One supported game build. Addresses are relative to the exe's base (Elden Ring's exe can be moved by ASLR).
+/// RVAs: ER's exe can move (ASLR).
 pub struct Game {
     pub name: &'static str,
-    /// The exe's file name, lowercase.
-    exe: &'static str,
-    /// Announce window update (window, dt): when the banner is idle, plays the next queued entry.
+    exe: &'static str, // lowercase
+    /// (window, dt)
     update_rva: usize,
     update_prologue: [u8; 8],
-    /// Queues a copy of a text (model, wchar*) -> false when 9 are already queued.
+    /// (model, wchar*) -> false when 9 are queued; copies the text.
     push_rva: usize,
     push_prologue: [u8; 8],
-    /// Window field: the announce model.
     window_model: usize,
-    /// Model field: entries in its queue (the playing one stays at the front until the game dequeues it).
+    /// Includes the playing entry.
     model_count: usize,
-    /// Window field: the play state byte, followed by the fields in `playback::Banner`.
+    /// State byte, then `playback::Banner`.
     window_state: usize,
-    /// Leading spaces, so the text doesn't start flush against the screen edge.
     pub padding: usize,
 }
 
@@ -67,7 +63,6 @@ const GAMES: [Game; 2] = [
 static GAME: OnceLock<&'static Game> = OnceLock::new();
 static ORIG_UPDATE: OnceLock<UpdateFn> = OnceLock::new();
 static PUSH: OnceLock<PushFn> = OnceLock::new();
-/// Durations of the texts in the game's queue and on screen (game thread only).
 static PLAYBACK: Mutex<Playback> = Mutex::new(Playback::new());
 
 unsafe extern "system" {
@@ -123,7 +118,7 @@ unsafe extern "system" fn update_hook(window: usize, dt: f32, a: usize, b: usize
     }
 }
 
-/// The game's code at `addr`, or another mod's hook on it (a `jmp`, which our detour chains after).
+/// Accepts another mod's jmp hook (we chain after it).
 fn check_code(game: &Game, addr: usize, prologue: &[u8]) -> Result<(), String> {
     let actual = unsafe { std::slice::from_raw_parts(addr as *const u8, prologue.len()) };
     if actual != prologue && actual[0] != 0xe9 {
@@ -139,7 +134,6 @@ fn exe_name() -> String {
     path.rsplit(['\\', '/']).next().unwrap_or_default().to_lowercase()
 }
 
-/// Detects the game by its exe and hooks it.
 pub fn install() -> Result<&'static Game, String> {
     let exe = exe_name();
     let game = GAMES.iter().find(|g| g.exe == exe).ok_or_else(|| format!("unsupported game ({exe})"))?;
@@ -158,7 +152,6 @@ pub fn install() -> Result<&'static Game, String> {
     Ok(game)
 }
 
-/// Leading spaces for the detected game (0 before `install`).
 pub fn padding() -> usize {
     GAME.get().map_or(0, |g| g.padding)
 }
